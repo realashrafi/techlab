@@ -6,10 +6,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 // تعریف تایپ‌ها
 interface BarcodeData {
   barcode: string;
-  name: string;
-  description: string;
-  price: number;
-  des: string;
+  label: string;
+  address_receiver: string;
+  address_sender: string;
+  next_yar: string;
 }
 
 interface Snapshot {
@@ -31,6 +31,12 @@ interface BarcodePosition {
   data: BarcodeData | null;
 }
 
+interface Resolution {
+  label: string;
+  width: number;
+  height: number;
+}
+
 const BarcodeScanner: React.FC = () => {
   const [barcodeData, setBarcodeData] = useState<BarcodeData | null>(null);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
@@ -38,6 +44,11 @@ const BarcodeScanner: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [scanLogs, setScanLogs] = useState<ScanLog[]>([]);
   const [barcodePositions, setBarcodePositions] = useState<BarcodePosition[]>([]);
+  const [selectedResolution, setSelectedResolution] = useState<Resolution>({
+    label: '720p',
+    width: 1280,
+    height: 720,
+  });
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const readerRef = useRef<BrowserMultiFormatReader | null>(null);
@@ -45,11 +56,155 @@ const BarcodeScanner: React.FC = () => {
   const isMounted = useRef<boolean>(true);
   const isDecoding = useRef<boolean>(false);
 
-  // دیتابیس فیک با فیلد des
+  // لیست رزولوشن‌های موجود
+  const resolutions: Resolution[] = [
+    { label: '480p', width: 640, height: 480 },
+    { label: '720p', width: 1280, height: 720 },
+    { label: '1080p', width: 1920, height: 1080 },
+  ];
+
+  // دیتابیس فیک
   const fakeBarcodeData: BarcodeData[] = [
-    { barcode: '123456789', name: 'محصول A', description: 'این یک محصول تستی است.', price: 100, des: 'شیراز' },
-    { barcode: '987654321', name: 'محصول B', description: 'محصول تستی دیگر.', price: 150, des: 'تهران' },
-    { barcode: '456789123', name: 'محصول C', description: 'محصول با ویژگی خاص.', price: 200, des: 'اصفهان' },
+    {
+      barcode: "PAST987654321",
+      label: "CE3",
+      address_receiver: "No. 12, Valiasr St., District 1, Tehran, Iran",
+      address_sender: "Apt. 4, Noor St., Mashhad, Iran",
+      next_yar: "Narges Shafiei"
+    },
+    {
+      barcode: "PAST987654323",
+      label: "CS2",
+      address_receiver: "Apt. 5, Enghelab St., District 2, Tehran, Iran",
+      address_sender: "No. 8, Persian Gulf Blvd., Bandar Abbas, Iran",
+      next_yar: "Zahra Mohammadi"
+    },
+    {
+      barcode: "PAST987654325",
+      label: "T3",
+      address_receiver: "Building 7, Babolsar Coastal Rd., Babolsar, Iran",
+      address_sender: "Unit 7, Shariati Ave., District 3, Tehran, Iran",
+      next_yar: "Maryam Amini"
+    },
+    {
+      barcode: "PAST987654327",
+      label: "CS1",
+      address_receiver: "Building 8, Saadat Abad, District 5, Tehran, Iran",
+      address_sender: "Unit 5, Zand St., Shiraz, Iran",
+      next_yar: "Sara Ranjbar"
+    },
+    {
+      barcode: "PAST987654329",
+      label: "CN1",
+      address_receiver: "No. 9, Vali-Asr St., District 6, Tehran, Iran",
+      address_sender: "Apt. 3, Rasht Central St., Rasht, Iran",
+      next_yar: "Elnaz Keshavarz"
+    },
+    {
+      barcode: "PAST987654331",
+      label: "CW1",
+      address_receiver: "Apt. 4, Niavaran Blvd., District 7, Tehran, Iran",
+      address_sender: "No. 12, Shahrdari St., Urmia, Iran",
+      next_yar: "Mahsa Rahimi"
+    },
+    {
+      barcode: "PAST987654333",
+      label: "CW2",
+      address_receiver: "Unit 2, Azadi Sq., District 9, Tehran, Iran",
+      address_sender: "Apt. 1, Kermanshah Blvd., Kermanshah, Iran",
+      next_yar: "Reyhaneh Ghaffari"
+    },
+    {
+      barcode: "PAST987654335",
+      label: "CE1",
+      address_receiver: "No. 15, Pasdaran St., District 10, Tehran, Iran",
+      address_sender: "Unit 11, Bojnord St., Bojnord, Iran",
+      next_yar: "Nazanin Khademi"
+    },
+    {
+      barcode: "PAST987654337",
+      label: "CW4",
+      address_receiver: "Building 3, Jomhouri Ave., District 12, Tehran, Iran",
+      address_sender: "No. 6, Zanjan Main St., Zanjan, Iran",
+      next_yar: "Fatemeh Aslani"
+    },
+    {
+      barcode: "PAST987654339",
+      label: "CC1",
+      address_receiver: "Apt. 11, Shahrak Gharb, District 13, Tehran, Iran",
+      address_sender: "Apt. 9, Fahadan St., Yazd, Iran",
+      next_yar: "Taraneh Sadat"
+    },
+    {
+      barcode: "PAST987654341",
+      label: "CW3",
+      address_receiver: "No. 6, Motahari St., District 14, Tehran, Iran",
+      address_sender: "Apt. 14, Farhang Blvd., Tabriz, Iran",
+      next_yar: "Amir Karimi"
+    },
+    {
+      barcode: "PAST987654343",
+      label: "CS2",
+      address_receiver: "Unit 9, Darband St., District 15, Tehran, Iran",
+      address_sender: "Building 9, Khoramshahr St., Ahvaz, Iran",
+      next_yar: "Reza Jafari"
+    },
+    {
+      barcode: "PAST987654345",
+      label: "CS6",
+      address_receiver: "Building 7, Ekbatan Town, District 16, Tehran, Iran",
+      address_sender: "Unit 4, Qeshm Island, Iran",
+      next_yar: "Ali Tabrizi"
+    },
+    {
+      barcode: "PAST987654347",
+      label: "CS5",
+      address_receiver: "Apt. 10, Hafez St., District 17, Tehran, Iran",
+      address_sender: "No. 7, Imam Khomeini Blvd., Kerman, Iran",
+      next_yar: "Saeed Moradi"
+    },
+    {
+      barcode: "PAST987654349",
+      label: "CW3",
+      address_receiver: "No. 8, Yadegar-e Emam Blvd., District 18, Tehran, Iran",
+      address_sender: "Building 12, Tabriz, Iran",
+      next_yar: "Mohammad Afshar"
+    },
+    {
+      barcode: "PAST987654351",
+      label: "CS1",
+      address_receiver: "Unit 5, Lavizan St., District 19, Tehran, Iran",
+      address_sender: "Apt. 3, Shiraz, Iran",
+      next_yar: "Mehdi Vaziri"
+    },
+    {
+      barcode: "PAST987654353",
+      label: "CE3",
+      address_receiver: "Building 4, Rey Blvd., District 20, Tehran, Iran",
+      address_sender: "No. 15, Mashhad, Iran",
+      next_yar: "Hossein Danesh"
+    },
+    {
+      barcode: "PAST987654355",
+      label: "T4",
+      address_receiver: "Unit 6, Rasht, Iran",
+      address_sender: "Apt. 6, Narmak, District 21, Tehran, Iran",
+      next_yar: "Pouria Ghodrati"
+    },
+    {
+      barcode: "PAST987654357",
+      label: "T14",
+      address_receiver: "No. 10, Urmia, Iran",
+      address_sender: "No. 14, Piroozi St., District 22, Tehran, Iran",
+      next_yar: "Keyvan Soltani"
+    },
+    {
+      barcode: "PAST987654359",
+      label: "CE1",
+      address_receiver: "Unit 3, Sadeghieh, District 1, Tehran, Iran",
+      address_sender: "Apt. 2, Bojnord, Iran",
+      next_yar: "Nima Esmaili"
+    }
   ];
 
   // تابع برای ترسیم باکس و اطلاعات روی Canvas
@@ -78,22 +233,33 @@ const BarcodeScanner: React.FC = () => {
       // نمایش اطلاعات بارکد
       if (pos.data) {
         ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-        ctx.fillRect(pos.topLeft.x, pos.topLeft.y - 60, 200, 60);
+        ctx.fillRect(pos.topLeft.x, pos.topLeft.y - 75, 250, 75);
         ctx.fillStyle = 'white';
         ctx.font = '14px sans-serif';
-        ctx.fillText(`نام: ${pos.data.name}`, pos.topLeft.x + 5, pos.topLeft.y - 45);
-        ctx.fillText(`قیمت: ${pos.data.price} تومان`, pos.topLeft.x + 5, pos.topLeft.y - 30);
-        ctx.fillText(`مقصد: ${pos.data.des}`, pos.topLeft.x + 5, pos.topLeft.y - 15);
+        ctx.fillText(`برچسب: ${pos.data.label}`, pos.topLeft.x + 5, pos.topLeft.y - 60);
+        ctx.fillText(`گیرنده: ${pos.data.address_receiver}`, pos.topLeft.x + 5, pos.topLeft.y - 45);
+        ctx.fillText(`فرستنده: ${pos.data.address_sender}`, pos.topLeft.x + 5, pos.topLeft.y - 30);
+        ctx.fillText(`نکس یار: ${pos.data.next_yar}`, pos.topLeft.x + 5, pos.topLeft.y - 15);
       }
     });
   };
 
-  useEffect(() => {
-    readerRef.current = new BrowserMultiFormatReader();
-    isMounted.current = true;
+  // تابع برای راه‌اندازی جریان ویدئو با رزولوشن انتخاب‌شده
+  const setupVideoStream = (resolution: Resolution) => {
+    if (videoRef.current && videoRef.current.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach((track) => track.stop());
+      videoRef.current.srcObject = null;
+    }
 
     navigator.mediaDevices
-        .getUserMedia({ video: { facingMode: 'environment' } })
+        .getUserMedia({
+          video: {
+            facingMode: 'environment',
+            width: { ideal: resolution.width },
+            height: { ideal: resolution.height },
+          },
+        })
         .then((stream) => {
           if (!isMounted.current) return;
           if (!videoRef.current) {
@@ -196,6 +362,13 @@ const BarcodeScanner: React.FC = () => {
           setError(`خطا در دسترسی به دوربین: ${err.message}. لطفاً دسترسی به دوربین را در تنظیمات مرورگر مجاز کنید.`);
           console.error('خطا در دسترسی به دوربین:', err);
         });
+  };
+
+  useEffect(() => {
+    readerRef.current = new BrowserMultiFormatReader();
+    isMounted.current = true;
+
+    setupVideoStream(selectedResolution);
 
     return () => {
       isMounted.current = false;
@@ -210,7 +383,7 @@ const BarcodeScanner: React.FC = () => {
         videoRef.current.pause();
       }
     };
-  }, []);
+  }, [selectedResolution]);
 
   // به‌روزرسانی Canvas برای ترسیم باکس‌ها
   useEffect(() => {
@@ -229,8 +402,16 @@ const BarcodeScanner: React.FC = () => {
     }
   };
 
+  // مدیریت تغییر رزولوشن
+  const handleResolutionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const selected = resolutions.find((res) => res.label === e.target.value);
+    if (selected) {
+      setSelectedResolution(selected);
+    }
+  };
+
   return (
-      <div className="min-h-screen bg-[url('https://wonderful-yonath-zqfmh2rkb.storage.iran.liara.space/local-share/181256-light-graphic_design-design-damonxart-linkedin-1366x768.jpg')] bg-cover  p-4 font-sans">
+      <div className="min-h-screen bg-[url('https://wonderful-yonath-zqfmh2rkb.storage.iran.liara.space/local-share/181256-light-graphic_design-design-damonxart-linkedin-1366x768.jpg')] bg-cover p-4 font-sans">
         <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-200 mb-6 text-center">
           اسکنر بارکد
         </h2>
@@ -241,8 +422,24 @@ const BarcodeScanner: React.FC = () => {
           <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
-              className="col-span-1 md:col-span-1  rounded-lg  overflow-hidden relative"
+              className="col-span-1 md:col-span-1 rounded-lg overflow-hidden relative"
           >
+            <div className="flex justify-between items-center mb-2">
+              <label className="text-gray-200 text-sm font-semibold">
+                انتخاب رزولوشن:
+              </label>
+              <select
+                  value={selectedResolution.label}
+                  onChange={handleResolutionChange}
+                  className="p-2 bg-gray-800/80 text-gray-200 rounded-lg text-sm"
+              >
+                {resolutions.map((res) => (
+                    <option key={res.label} value={res.label}>
+                      {res.label}
+                    </option>
+                ))}
+              </select>
+            </div>
             <video
                 ref={videoRef}
                 className="w-full h-fit"
@@ -278,16 +475,16 @@ const BarcodeScanner: React.FC = () => {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: 20 }}
-                      className=" bg-gray-800/80 backdrop-blur-xs p-4 rounded-lg shadow-md"
+                      className="bg-gray-800/80 backdrop-blur-xs p-4 rounded-lg shadow-md"
                   >
                     <h3 className="text-lg font-semibold text-gray-200 mb-2">
                       اطلاعات بارکد
                     </h3>
                     <ul className="space-y-2 text-gray-300 text-sm">
-                      <li><span className="font-semibold">نام:</span> {barcodeData.name}</li>
-                      <li><span className="font-semibold">توضیحات:</span> {barcodeData.description}</li>
-                      <li><span className="font-semibold">قیمت:</span> {barcodeData.price} تومان</li>
-                      <li><span className="font-semibold">مقصد:</span> {barcodeData.des}</li>
+                      <li><span className="font-semibold">برچسب:</span> {barcodeData.label}</li>
+                      <li><span className="font-semibold">آدرس گیرنده:</span> {barcodeData.address_receiver}</li>
+                      <li><span className="font-semibold">آدرس فرستنده:</span> {barcodeData.address_sender}</li>
+                      <li><span className="font-semibold">نکس یار:</span> {barcodeData.next_yar}</li>
                     </ul>
                   </motion.div>
               ) : (
@@ -386,21 +583,20 @@ const BarcodeScanner: React.FC = () => {
                     {fakeBarcodeData.find((item) => item.barcode === selectedSnapshot.barcode) && (
                         <>
                           <li>
-                            <span className="font-semibold">نام:</span>{' '}
-                            {fakeBarcodeData.find((item) => item.barcode === selectedSnapshot.barcode)!.name}
+                            <span className="font-semibold">برچسب:</span>{' '}
+                            {fakeBarcodeData.find((item) => item.barcode === selectedSnapshot.barcode)!.label}
                           </li>
                           <li>
-                            <span className="font-semibold">توضیحات:</span>{' '}
-                            {fakeBarcodeData.find((item) => item.barcode === selectedSnapshot.barcode)!.description}
+                            <span className="font-semibold">آدرس گیرنده:</span>{' '}
+                            {fakeBarcodeData.find((item) => item.barcode === selectedSnapshot.barcode)!.address_receiver}
                           </li>
                           <li>
-                            <span className="font-semibold">قیمت:</span>{' '}
-                            {fakeBarcodeData.find((item) => item.barcode === selectedSnapshot.barcode)!.price}{' '}
-                            تومان
+                            <span className="font-semibold">آدرس فرستنده:</span>{' '}
+                            {fakeBarcodeData.find((item) => item.barcode === selectedSnapshot.barcode)!.address_sender}
                           </li>
                           <li>
-                            <span className="font-semibold">مقصد:</span>{' '}
-                            {fakeBarcodeData.find((item) => item.barcode === selectedSnapshot.barcode)!.des}
+                            <span className="font-semibold">نکس یار:</span>{' '}
+                            {fakeBarcodeData.find((item) => item.barcode === selectedSnapshot.barcode)!.next_yar}
                           </li>
                         </>
                     )}
