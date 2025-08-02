@@ -112,6 +112,7 @@ const BarcodeScanner: React.FC = () => {
                   // @ts-ignore
                   undefined,
                   videoRef.current!,
+                  //@ts-ignore
                   (result: Result, err) => {
                     if (!isMounted.current) {
                       isDecoding.current = false;
