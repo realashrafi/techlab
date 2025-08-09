@@ -1,0 +1,484 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { BrowserMultiFormatReader, DecodeHintType, Result } from '@zxing/library';
+import { database } from './database';
+
+// تعریف تایپ‌ها
+interface BarcodeData {
+    barcode: string;
+    label: string;
+    address_receiver: string;
+    address_sender: string;
+    next_yar: string;
+}
+
+interface Snapshot {
+    id: number;
+    image: string;
+    barcode: string;
+}
+
+interface ScanLog {
+    barcode: string;
+    status: 'موجود' | 'ناموجود';
+    timestamp: string;
+}
+
+interface BarcodePosition {
+    barcode: string;
+    topLeft: { x: number; y: number };
+    bottomRight: { x: number; y: number };
+    data: BarcodeData | null;
+}
+
+interface Resolution {
+    label: string;
+    width: number;
+    height: number;
+}
+
+const BarcodeScanner: React.FC = () => {
+    const [barcodeData, setBarcodeData] = useState<BarcodeData[]>([]);
+    const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
+    const [selectedSnapshot, setSelectedSnapshot] = useState<Snapshot | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [scanLogs, setScanLogs] = useState<ScanLog[]>([]);
+    const [barcodePositions, setBarcodePositions] = useState<BarcodePosition[]>([]);
+    const [selectedResolution, setSelectedResolution] = useState<Resolution>({
+        label: '720p',
+        width: 1280,
+        height: 720,
+    });
+    const videoRef = useRef<HTMLVideoElement>(null);
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const readerRef = useRef<BrowserMultiFormatReader | null>(null);
+    const scannedCodes = useRef<Set<string>>(new Set());
+    const isMounted = useRef<boolean>(true);
+    const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
+
+    const resolutions: Resolution[] = [
+        { label: '480p', width: 640, height: 480 },
+        { label: '720p', width: 1280, height: 720 },
+        { label: '1080p', width: 1920, height: 1080 },
+    ];
+
+    const fakeBarcodeData: BarcodeData[] = database;
+
+    const drawBarcodeOverlay = (positions: BarcodePosition[]) => {
+        if (!canvasRef.current || !videoRef.current) return;
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        canvas.width = videoRef.current.videoWidth;
+        canvas.height = videoRef.current.videoHeight;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        positions.forEach((pos) => {
+            ctx.strokeStyle = 'lime';
+            ctx.lineWidth = 4;
+            ctx.strokeRect(
+                pos.topLeft.x,
+                pos.topLeft.y,
+                pos.bottomRight.x - pos.topLeft.x,
+                pos.bottomRight.y - pos.topLeft.y
+            );
+
+            if (pos.data) {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                ctx.fillRect(pos.topLeft.x, pos.topLeft.y - 75, 250, 75);
+                ctx.fillStyle = 'white';
+                ctx.font = '14px sans-serif';
+                ctx.fillText(`برچسب: ${pos.data.label}`, pos.topLeft.x + 5, pos.topLeft.y - 60);
+                ctx.fillText(`گیرنده: ${pos.data.address_receiver}`, pos.topLeft.x + 5, pos.topLeft.y - 45);
+                ctx.fillText(`فرستنده: ${pos.data.address_sender}`, pos.topLeft.x + 5, pos.topLeft.y - 30);
+                ctx.fillText(`نکس یار: ${pos.data.next_yar}`, pos.topLeft.x + 5, pos.topLeft.y - 15);
+            }
+        });
+
+        // ارسال تصویر کانواس به BroadcastChannel
+        const canvasData = canvas.toDataURL('image/png');
+        if (broadcastChannelRef.current) {
+            broadcastChannelRef.current.postMessage({ type: 'canvas', data: canvasData });
+        }
+    };
+
+    const setupVideoStream = (resolution: Resolution) => {
+        if (videoRef.current && videoRef.current.srcObject) {
+            const stream = videoRef.current.srcObject as MediaStream;
+            stream.getTracks().forEach((track) => track.stop());
+            videoRef.current.srcObject = null;
+        }
+
+        navigator.mediaDevices
+            .getUserMedia({
+                video: {
+                    facingMode: 'environment',
+                    width: { ideal: resolution.width },
+                    height: { ideal: resolution.height },
+                },
+            })
+            .then((stream) => {
+                if (!isMounted.current) return;
+                if (!videoRef.current) {
+                    setError('المنت ویدئو یافت نشد.');
+                    return;
+                }
+                videoRef.current.srcObject = stream;
+                videoRef.current.play();
+
+                // ارسال فریم‌های ویدئو به BroadcastChannel
+                const canvas = document.createElement('canvas');
+                canvas.width = videoRef.current.videoWidth;
+                canvas.height = videoRef.current.videoHeight;
+                const ctx = canvas.getContext('2d');
+                const sendVideoFrame = () => {
+                    if (!ctx || !videoRef.current || !isMounted.current) return;
+                    ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+                    const videoData = canvas.toDataURL('image/jpeg', 0.5); // کاهش کیفیت برای عملکرد بهتر
+                    if (broadcastChannelRef.current) {
+                        broadcastChannelRef.current.postMessage({ type: 'video', data: videoData });
+                    }
+                    requestAnimationFrame(sendVideoFrame);
+                };
+                requestAnimationFrame(sendVideoFrame);
+            })
+            .catch((err) => {
+                if (!isMounted.current) return;
+                setError(`خطا در دسترسی به دوربین: ${err.message}.`);
+            });
+    };
+
+    useEffect(() => {
+        // راه‌اندازی BroadcastChannel
+        broadcastChannelRef.current = new BroadcastChannel('barcode_stream');
+        broadcastChannelRef.current.onmessage = (event) => {
+            // می‌تونی اینجا پیام‌های دریافتی از تب‌های دیگر رو مدیریت کنی (اختیاری)
+        };
+
+        const hints = new Map();
+        hints.set(DecodeHintType.TRY_HARDER, true);
+        hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+            'QR_CODE',
+            'CODE_128',
+            'CODE_39',
+            'EAN_13',
+            'UPC_A',
+        ]);
+
+        readerRef.current = new BrowserMultiFormatReader(hints);
+        isMounted.current = true;
+
+        setupVideoStream(selectedResolution);
+
+        const scanMultiple = async () => {
+            if (!videoRef.current || !isMounted.current) return;
+            const canvas = document.createElement('canvas');
+            canvas.width = videoRef.current.videoWidth;
+            canvas.height = videoRef.current.videoHeight;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
+            ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+
+            try {
+                // @ts-ignore
+                const results: Result[] = await readerRef.current!.decodeMultiple(canvas);
+                if (!isMounted.current) return;
+
+                const newPositions: BarcodePosition[] = [];
+                const timestamp = new Date().toLocaleString('fa-IR');
+
+                results.forEach((result) => {
+                    const code = result.getText();
+                    if (scannedCodes.current.has(code)) return;
+                    scannedCodes.current.add(code);
+
+                    const foundData = fakeBarcodeData.find((item) => item.barcode === code);
+                    setScanLogs((prev) => [
+                        { barcode: code, status: foundData ? 'موجود' : 'ناموجود', timestamp },
+                        ...prev.slice(0, 9),
+                    ]);
+
+                    if (foundData) {
+                        setBarcodeData((prev) => [...prev.filter((d) => d.barcode !== code), foundData]);
+                        const resultPoints = result.getResultPoints();
+                        const topLeft = resultPoints[0];
+                        const bottomRight = resultPoints[2] || resultPoints[1];
+                        newPositions.push({
+                            barcode: code,
+                            topLeft: { x: topLeft.getX(), y: topLeft.getY() },
+                            bottomRight: { x: bottomRight.getX(), y: bottomRight.getY() },
+                            data: foundData,
+                        });
+
+                        const snapCanvas = document.createElement('canvas');
+                        snapCanvas.width = videoRef.current!.videoWidth;
+                        snapCanvas.height = videoRef.current!.videoHeight;
+                        const snapCtx = snapCanvas.getContext('2d');
+                        if (snapCtx) {
+                            snapCtx.drawImage(videoRef.current!, 0, 0, snapCanvas.width, snapCanvas.height);
+                            const newSnapshot = snapCanvas.toDataURL('image/png');
+                            setSnapshots((prev) => {
+                                if (prev.some((snap) => snap.barcode === code)) return prev;
+                                return [{ id: Date.now(), image: newSnapshot, barcode: code }, ...prev];
+                            });
+                        }
+                    }
+
+                    setTimeout(() => {
+                        scannedCodes.current.delete(code);
+                    }, 1000);
+                });
+
+                setBarcodePositions(newPositions);
+            } catch (err: any) {
+                if (err.name !== 'NotFoundException') {
+                    setError('خطا در اسکن بارکد: ' + err.message);
+                }
+            }
+
+            if (isMounted.current) {
+                requestAnimationFrame(scanMultiple);
+            }
+        };
+
+        requestAnimationFrame(scanMultiple);
+
+        return () => {
+            isMounted.current = false;
+            if (readerRef.current) {
+                readerRef.current.reset();
+                readerRef.current = null;
+            }
+            if (videoRef.current && videoRef.current.srcObject) {
+                const stream = videoRef.current.srcObject as MediaStream;
+                stream.getTracks().forEach((track) => track.stop());
+                videoRef.current.srcObject = null;
+            }
+            if (broadcastChannelRef.current) {
+                broadcastChannelRef.current.close();
+            }
+        };
+    }, [selectedResolution]);
+
+    useEffect(() => {
+        drawBarcodeOverlay(barcodePositions);
+    }, [barcodePositions]);
+
+    const handleSnapshotClick = (snap: Snapshot) => {
+        setSelectedSnapshot(snap);
+    };
+
+    const handleCloseModal = (e: React.MouseEvent<HTMLDivElement>) => {
+        if (e.target === e.currentTarget) {
+            setSelectedSnapshot(null);
+        }
+    };
+
+    const handleResolutionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+        const selected = resolutions.find((res) => res.label === e.target.value);
+        if (selected) {
+            setSelectedResolution(selected);
+        }
+    };
+
+    return (
+        <div className="min-h-screen bg-[url('https://wonderful-yonath-zqfmh2rkb.storage.iran.liara.space/local-share/181256-light-graphic_design-design-damonxart-linkedin-1366x768.jpg')] bg-cover p-4 font-sans">
+            <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-200 mb-6 text-center">
+                اسکنر بارکد
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 max-w-7xl mx-auto">
+                <motion.div
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="col-span-1 md:col-span-1 rounded-lg overflow-hidden relative"
+                >
+                    <div className="flex justify-between items-center mb-2">
+                        <label className="text-gray-200 text-sm font-semibold">
+                            انتخاب رزولوشن:
+                        </label>
+                        <select
+                            value={selectedResolution.label}
+                            onChange={handleResolutionChange}
+                            className="p-2 bg-gray-800/80 text-gray-200 rounded-lg text-sm"
+                        >
+                            {resolutions.map((res) => (
+                                <option key={res.label} value={res.label}>
+                                    {res.label}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                    <video
+                        ref={videoRef}
+                        className="w-full h-fit"
+                        autoPlay
+                        muted
+                        playsInline
+                    />
+                    <canvas
+                        ref={canvasRef}
+                        className="absolute top-0 left-0 w-full h-full"
+                        style={{ pointerEvents: 'none' }}
+                    />
+                    <AnimatePresence>
+                        {error && (
+                            <motion.div
+                                initial={{ opacity: 0, y: -20 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -20 }}
+                                className="p-4 bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-200 text-sm"
+                            >
+                                {error}
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+                </motion.div>
+
+                <div className="col-span-1 md:col-span-1 space-y-4">
+                    <AnimatePresence>
+                        {barcodeData.length > 0 ? (
+                            barcodeData.map((data, index) => (
+                                <motion.div
+                                    key={index}
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, y: 20 }}
+                                    className="bg-gray-800/80 backdrop-blur-xs p-4 rounded-lg shadow-md"
+                                >
+                                    <h3 className="text-lg font-semibold text-gray-200 mb-2">
+                                        اطلاعات بارکد {data.barcode}
+                                    </h3>
+                                    <ul className="space-y-2 text-gray-300 text-sm">
+                                        <li><span className="font-semibold">برچسب:</span> {data.label}</li>
+                                        <li><span className="font-semibold">آدرس گیرنده:</span> {data.address_receiver}</li>
+                                        <li><span className="font-semibold">آدرس فرستنده:</span> {data.address_sender}</li>
+                                        <li><span className="font-semibold">نکس یار:</span> {data.next_yar}</li>
+                                    </ul>
+                                </motion.div>
+                            ))
+                        ) : (
+                            <p className="text-center text-gray-400 text-sm">
+                                لطفاً یک بارکد را اسکن کنید.
+                            </p>
+                        )}
+                    </AnimatePresence>
+
+                    {snapshots.length > 0 && (
+                        <motion.div
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="bg-gray-800/80 backdrop-blur-xs p-4 rounded-lg shadow-md"
+                        >
+                            <h3 className="text-lg font-semibold text-gray-200 mb-4">
+                                گالری اسنپ‌شات‌ها
+                            </h3>
+                            <div className="grid grid-cols-2 gap-4">
+                                {snapshots.map((snap) => (
+                                    <motion.div
+                                        key={snap.id}
+                                        initial={{ opacity: 0, scale: 0.95 }}
+                                        animate={{ opacity: 1, scale: 1 }}
+                                        whileHover={{ scale: 1.05 }}
+                                        className="relative rounded-lg overflow-hidden shadow-md cursor-pointer"
+                                        onClick={() => handleSnapshotClick(snap)}
+                                    >
+                                        <img
+                                            src={snap.image}
+                                            alt={`Snapshot ${snap.barcode}`}
+                                            className="w-full h-24 object-cover"
+                                        />
+                                        <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 text-white text-xs p-1 text-center">
+                                            {snap.barcode}
+                                        </div>
+                                    </motion.div>
+                                ))}
+                            </div>
+                        </motion.div>
+                    )}
+                </div>
+
+                <div className="col-span-1 md:col-span-1">
+                    {scanLogs.length > 0 && (
+                        <motion.div
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="bg-gray-800/80 backdrop-blur-xs p-4 rounded-lg shadow-md h-full"
+                        >
+                            <h3 className="text-lg font-semibold text-gray-200 mb-4">
+                                تاریخچه اسکن‌ها
+                            </h3>
+                            <ul className="space-y-2 text-gray-300 max-h-96 overflow-y-auto text-sm">
+                                {scanLogs.map((log, index) => (
+                                    <li key={index}>
+                                        <span className="font-semibold">کد:</span> {log.barcode} |{' '}
+                                        <span>{log.status}</span> | <span>{log.timestamp}</span>
+                                    </li>
+                                ))}
+                            </ul>
+                        </motion.div>
+                    )}
+                </div>
+            </div>
+
+            <AnimatePresence>
+                {selectedSnapshot && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 bg-gray-800/80 backdrop-blur-xs bg-opacity-50 flex items-center justify-center z-50"
+                        onClick={handleCloseModal}
+                    >
+                        <motion.div
+                            initial={{ scale: 0.8, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            exit={{ scale: 0.8, opacity: 0 }}
+                            className="bg-gray-800/60 backdrop-blur-xs p-6 rounded-lg shadow-xl max-w-md w-full mx-4"
+                        >
+                            <h3 className="text-lg font-semibold text-gray-200 mb-4">
+                                جزئیات اسنپ‌شات
+                            </h3>
+                            <img
+                                src={selectedSnapshot.image}
+                                alt={`Snapshot ${selectedSnapshot.barcode}`}
+                                className="w-full h-fit object-cover rounded-lg mb-4"
+                            />
+                            <ul className="space-y-2 text-gray-300 text-sm">
+                                <li><span className="font-semibold">کد بارکد:</span> {selectedSnapshot.barcode}</li>
+                                {fakeBarcodeData.find((item) => item.barcode === selectedSnapshot.barcode) && (
+                                    <>
+                                        <li>
+                                            <span className="font-semibold">برچسب:</span>{' '}
+                                            {fakeBarcodeData.find((item) => item.barcode === selectedSnapshot.barcode)!.label}
+                                        </li>
+                                        <li>
+                                            <span className="font-semibold">آدرس گیرنده:</span>{' '}
+                                            {fakeBarcodeData.find((item) => item.barcode === selectedSnapshot.barcode)!.address_receiver}
+                                        </li>
+                                        <li>
+                                            <span className="font-semibold">آدرس فرستنده:</span>{' '}
+                                            {fakeBarcodeData.find((item) => item.barcode === selectedSnapshot.barcode)!.address_sender}
+                                        </li>
+                                        <li>
+                                            <span className="font-semibold">نکس یار:</span>{' '}
+                                            {fakeBarcodeData.find((item) => item.barcode === selectedSnapshot.barcode)!.next_yar}
+                                        </li>
+                                    </>
+                                )}
+                            </ul>
+                            <button
+                                onClick={() => setSelectedSnapshot(null)}
+                                className="mt-4 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 w-full"
+                            >
+                                بستن
+                            </button>
+                        </motion.div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </div>
+    );
+};
+
+export default BarcodeScanner;
