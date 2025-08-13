@@ -9,6 +9,7 @@ function App() {
         <Routes>
           <Route path="/" element={<Main />} />
           <Route path="/br" element={<BarcodeScanner />} />
+          <Route path="/old" element={<BarcodeScanner />} />
           <Route path="/stream" element={<Stream />} />
         </Routes>
       </Router>
